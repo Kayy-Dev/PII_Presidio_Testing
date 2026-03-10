@@ -28,6 +28,7 @@ build/
 # Environment variables
 .env
 .env.*
+local_keys.json
 
 # IDE / editor
 .vscode/
@@ -41,3 +42,5 @@ Thumbs.db
 
 # Logs
 *.log
+
+

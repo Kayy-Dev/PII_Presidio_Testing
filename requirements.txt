@@ -2,3 +2,5 @@ presidio-analyzer
 presidio-anonymizer
 spacy
 streamlit
+cryptography
+psycopg[binary]
