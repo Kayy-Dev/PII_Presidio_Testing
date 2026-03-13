@@ -10,6 +10,7 @@ A local PII (Personally Identifiable Information) detection and anonymization to
 
 - Detects common PII entities: names, email addresses, phone numbers, SSNs, street addresses, ZIP codes, and locations
 - Custom employee ID recognizer (`EMP-00123` format)
+- Supports English and Chinese spaCy pipelines with manual language selection or automatic detection
 - Reversible tokenization for LLM prompts using typed placeholders such as `{{PERSON_1}}`
 - AES-GCM encryption for stored original values before they are written to a token store
 - In-memory token store for local demos and Postgres token store for production deployments
@@ -102,10 +103,11 @@ $env:PII_KEY_FILE = "D:\PythonProject\PII_testing\local_keys.json"
 
 When `PII_KEY_FILE` is set, the app uses the file-backed key provider before falling back to environment variables or the in-process development key.
 
-### 3. Download the spaCy English model
+### 3. Download the spaCy models
 
 ```bash
 python -m spacy download en_core_web_lg
+python -m spacy download zh_core_web_sm
 ```
 
 ---
@@ -120,6 +122,8 @@ streamlit run app.py --server.headless true
 
 Then open http://localhost:8501 in your browser.
 
+Choose `Auto`, `English`, or `Chinese` in the app before tokenizing. `Auto` uses `langdetect` and falls back to English when the input is too short or detection is uncertain.
+
 > **Note:** The `--server.headless true` flag skips Streamlit's first-run interactive email prompt, which would otherwise block the process.
 >
 > If `PII_DATABASE_URL` is not set, the app uses an in-memory token store.
@@ -130,6 +134,8 @@ Then open http://localhost:8501 in your browser.
 ```bash
 python analyzer_test.py
 ```
+
+The example now runs one English sample and one Chinese sample.
 
 ### Run the custom recognizer example
 
@@ -209,10 +215,10 @@ Recommended production setup:
 
 ## Known Limitations
 
-- **Non-Western names** (e.g. Burmese, Chinese, Arabic) are often partially detected or mis-tagged by spaCy's English-only model. Partial fixes are in place via context-aware reclassification.
+- **Chinese names and organizations** depend on the quality of the installed Chinese spaCy model. Regex-based entities such as email, postal code, and mobile numbers are generally more reliable than NER-based entities.
 - **`123-45-6789`** is intentionally blocked by Presidio as a known dummy/test SSN.
 - **Street addresses** without a recognised suffix (Street, Ave, Rd, etc.) will not be detected by the regex recognizer.
-- The `en_core_web_lg` model was trained on English/Western text — accuracy degrades on multilingual input.
+- The English address recognizers remain US-centric. Chinese address parsing is intentionally limited to a practical first pass for this release.
 
 ---
 
@@ -223,6 +229,7 @@ Recommended production setup:
 | `presidio-analyzer` | PII entity detection engine |
 | `presidio-anonymizer` | Replaces detected PII with placeholders |
 | `spacy` | NLP backend (NER, tokenization) |
+| `langdetect` | Automatic language detection for `Auto` mode |
 | `streamlit` | Web UI |
 
 ---

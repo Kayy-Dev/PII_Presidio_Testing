@@ -3,6 +3,7 @@ import os
 import streamlit as st
 
 from crypto import AesGcmCipher, EnvironmentKeyProvider, FileKeyProvider, LocalKeyProvider
+from language_utils import LANGUAGE_OPTIONS, resolve_language
 from pii_service import ReversiblePIIService
 from token_store import InMemoryTokenStore, PostgresTokenStore
 
@@ -51,11 +52,22 @@ st.markdown(
 )
 st.caption(f"Storage backend: {backend_label}")
 
+language_label = st.selectbox("Language", list(LANGUAGE_OPTIONS))
+selected_language = LANGUAGE_OPTIONS[language_label]
+
 # Text input
 input_text = st.text_area("Input Text", height=200, placeholder="Paste text with PII here...")
 
 if st.button("Tokenize For AI") and input_text.strip():
-    tokenization = service.tokenize(input_text)
+    resolved_language, resolution_source = resolve_language(input_text, selected_language)
+    tokenization = service.tokenize(input_text, language=resolved_language)
+
+    if resolution_source == "auto":
+        st.caption(f"Language used: {resolved_language} (auto-detected)")
+    elif resolution_source == "manual":
+        st.caption(f"Language used: {resolved_language} (manual override)")
+    else:
+        st.caption("Language used: en (auto-detect fallback)")
 
     st.subheader("Detected PII Entities")
     if tokenization.detected_entities:
