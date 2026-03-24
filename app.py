@@ -56,18 +56,25 @@ language_label = st.selectbox("Language", list(LANGUAGE_OPTIONS))
 selected_language = LANGUAGE_OPTIONS[language_label]
 
 # Text input
-input_text = st.text_area("Input Text", height=200, placeholder="Paste text with PII here...")
+input_text = st.text_area(
+    "Input Text",
+    height=200,
+    placeholder=(
+        "Paste text with PII here, e.g. My name is Kayy Kayy，我叫王小明。 "
+        "Email me at kayy.kayy@company.com 或者拨打 13800138000。"
+    ),
+)
 
 if st.button("Tokenize For AI") and input_text.strip():
     resolved_language, resolution_source = resolve_language(input_text, selected_language)
     tokenization = service.tokenize(input_text, language=resolved_language)
 
     if resolution_source == "auto":
-        st.caption(f"Language used: {resolved_language} (auto-detected)")
+        st.caption("Language used: en + zh (auto mode)")
     elif resolution_source == "manual":
         st.caption(f"Language used: {resolved_language} (manual override)")
     else:
-        st.caption("Language used: en (auto-detect fallback)")
+        st.caption(f"Language used: {resolved_language}")
 
     st.subheader("Detected PII Entities")
     if tokenization.detected_entities:

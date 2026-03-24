@@ -27,6 +27,13 @@ You can reach me at kayy.kayy@company.com and my employee id is EMP-00123.
 你可以通过13800138000或者xiaoming.wang@example.com联系我。
 """,
     ),
+    (
+        "auto",
+        """
+Hi, my name is Kayy Kayy，我叫王小明。
+Email me at kayy.kayy@company.com 或者拨打 13800138000。
+""",
+    ),
 ]
 
 for language, text in samples:

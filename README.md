@@ -122,7 +122,14 @@ streamlit run app.py --server.headless true
 
 Then open http://localhost:8501 in your browser.
 
-Choose `Auto`, `English`, or `Chinese` in the app before tokenizing. `Auto` uses `langdetect` and falls back to English when the input is too short or detection is uncertain.
+Choose `Auto`, `English`, or `Chinese` in the app before tokenizing. `Auto` now runs both the English and Chinese analyzers on the same input and merges the results, which is useful for mixed-language text.
+
+Mixed-language example for `Auto` mode:
+
+```text
+My name is Kayy Kayy，我叫王小明。
+Email me at kayy.kayy@company.com 或者拨打 13800138000。
+```
 
 > **Note:** The `--server.headless true` flag skips Streamlit's first-run interactive email prompt, which would otherwise block the process.
 >
@@ -135,12 +142,18 @@ Choose `Auto`, `English`, or `Chinese` in the app before tokenizing. `Auto` uses
 python analyzer_test.py
 ```
 
-The example now runs one English sample and one Chinese sample.
+The example now runs one English sample, one Chinese sample, and one mixed-language `auto` sample.
 
 ### Run the custom recognizer example
 
 ```bash
 python custom_recognizer.py
+```
+
+### Run the auto-mode regression tests
+
+```bash
+python -m unittest test_auto_mode.py
 ```
 
 ---
@@ -180,6 +193,22 @@ My name is {{PERSON_1}} and my employee id is {{EMPLOYEE_ID_1}}.
 
 Restored output:
 My name is Kayy Kayy and my employee id is EMP-00123.
+```
+
+Mixed-language example:
+
+```text
+Input:
+My name is Kayy Kayy，我叫王小明。
+Email me at kayy.kayy@company.com 或者拨打 13800138000。
+
+Prompt sent to AI:
+My name is {{PERSON_1}}，我叫{{PERSON_2}}。
+Email me at {{EMAIL_ADDRESS_1}} 或者拨打 {{PHONE_NUMBER_1}}。
+
+Restored output:
+My name is Kayy Kayy，我叫王小明。
+Email me at kayy.kayy@company.com 或者拨打 13800138000。
 ```
 
 Do not send encrypted ciphertext to the model. The model should only see semantic tokens.
@@ -229,7 +258,6 @@ Recommended production setup:
 | `presidio-analyzer` | PII entity detection engine |
 | `presidio-anonymizer` | Replaces detected PII with placeholders |
 | `spacy` | NLP backend (NER, tokenization) |
-| `langdetect` | Automatic language detection for `Auto` mode |
 | `streamlit` | Web UI |
 
 ---

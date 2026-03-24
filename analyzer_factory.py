@@ -1,3 +1,4 @@
+import re
 from functools import lru_cache
 
 from presidio_analyzer import AnalyzerEngine, Pattern, PatternRecognizer, RecognizerResult
@@ -5,6 +6,7 @@ from presidio_analyzer.nlp_engine import NlpEngineProvider
 
 
 SUPPORTED_LANGUAGES = ("en", "zh")
+AUTO_LANGUAGE = "auto"
 
 
 # Words/phrases that spaCy commonly mis-tags as PERSON
@@ -56,6 +58,34 @@ PERSON_CONTEXT_PHRASES = {
     "zh": ["我是", "我叫", "我的名字是", "名字是", "叫我"],
 }
 
+ZH_LOCATION_PREFIXES = (
+    "请把包裹寄到",
+    "把包裹寄到",
+    "请寄到",
+    "邮寄到",
+    "寄到",
+    "寄往",
+    "送到",
+    "送至",
+    "发到",
+    "地址是",
+    "住在",
+    "位于",
+    "来自",
+    "在",
+)
+ZH_ADMIN_LOCATION_RE = re.compile(
+    r"(?:[\u4e00-\u9fff]{2,12}(?:省|自治区|特别行政区))?"
+    r"(?:[\u4e00-\u9fff]{2,12}市)?"
+    r"(?:[\u4e00-\u9fff]{2,12}(?:区|县|旗))"
+)
+ZH_ADMIN_LOCATION_FULL_RE = re.compile(rf"^{ZH_ADMIN_LOCATION_RE.pattern}$")
+
+AUTO_SCRIPT_SENSITIVE_ENTITIES = {"PERSON", "ORGANIZATION", "LOCATION"}
+WESTERN_NAME_CONTINUATION_RE = re.compile(
+    r"(?:\s+[A-Z][A-Za-z'\-]*)+"
+)
+
 
 @lru_cache(maxsize=1)
 def build_analyzer() -> AnalyzerEngine:
@@ -94,6 +124,14 @@ def build_analyzer() -> AnalyzerEngine:
         ),
         score=0.85,
     )
+    en_unit_pattern = Pattern(
+        name="en_unit_pattern",
+        regex=(
+            r"\b(?:Room|Rm|Suite|Ste|Unit|Apartment|Apt|Building|Bldg|Floor|Fl)"
+            r"\s+[A-Z0-9][A-Za-z0-9\-]*\b"
+        ),
+        score=0.82,
+    )
     zip_pattern = Pattern(
         name="us_zip_pattern",
         regex=r"\b(?:[A-Z]{2}\s+)?\d{5}(?:-\d{4})?\b",
@@ -103,6 +141,16 @@ def build_analyzer() -> AnalyzerEngine:
         name="cn_postal_code_pattern",
         regex=r"(?<!\d)\d{6}(?!\d)",
         score=0.6,
+    )
+    cn_admin_location_pattern = Pattern(
+        name="cn_admin_location_pattern",
+        regex=ZH_ADMIN_LOCATION_RE.pattern,
+        score=0.9,
+    )
+    cn_unit_pattern = Pattern(
+        name="cn_unit_pattern",
+        regex=r"(?<!\d)\d{1,4}(?:室|楼|栋|号楼|单元)(?!\d)",
+        score=0.82,
     )
     employee_id_pattern = Pattern(
         name="employee_id_pattern",
@@ -142,6 +190,13 @@ def build_analyzer() -> AnalyzerEngine:
         PatternRecognizer(
             supported_entity="LOCATION",
             supported_language="en",
+            patterns=[en_unit_pattern],
+        )
+    )
+    analyzer.registry.add_recognizer(
+        PatternRecognizer(
+            supported_entity="LOCATION",
+            supported_language="en",
             patterns=[zip_pattern],
         )
     )
@@ -150,6 +205,20 @@ def build_analyzer() -> AnalyzerEngine:
             supported_entity="LOCATION",
             supported_language="zh",
             patterns=[cn_postal_code_pattern],
+        )
+    )
+    analyzer.registry.add_recognizer(
+        PatternRecognizer(
+            supported_entity="LOCATION",
+            supported_language="zh",
+            patterns=[cn_admin_location_pattern],
+        )
+    )
+    analyzer.registry.add_recognizer(
+        PatternRecognizer(
+            supported_entity="LOCATION",
+            supported_language="zh",
+            patterns=[cn_unit_pattern],
         )
     )
     analyzer.registry.add_recognizer(
@@ -184,6 +253,9 @@ def clean_results(
 
     cleaned: list[RecognizerResult] = []
     for result in results:
+        if result.entity_type == "LOCATION" and language == "zh":
+            result = _trim_zh_location_prefix(result, text)
+
         matched_text = text[result.start:result.end].lower().strip()
 
         if result.entity_type == "PERSON":
@@ -229,6 +301,27 @@ def clean_results(
 
 def analyze_text(text: str, language: str = "en") -> list[RecognizerResult]:
     analyzer = build_analyzer()
+
+    if language == AUTO_LANGUAGE:
+        merged_results: list[RecognizerResult] = []
+        for supported_language in SUPPORTED_LANGUAGES:
+            language_results = analyzer.analyze(text=text, language=supported_language)
+            cleaned_results = clean_results(
+                language_results,
+                text,
+                language=supported_language,
+            )
+            merged_results.extend(
+                _filter_auto_language_results(
+                    cleaned_results,
+                    text,
+                    language=supported_language,
+                )
+            )
+        merged_results = _drop_overlaps(merged_results)
+        merged_results = _expand_auto_western_person_names(merged_results, text)
+        return _drop_overlaps(merged_results)
+
     results = analyzer.analyze(text=text, language=language)
     return clean_results(results, text, language=language)
 
@@ -240,6 +333,72 @@ def _has_org_indicator(matched_text: str, language: str) -> bool:
 
     words = set(matched_text.split())
     return bool(words & indicators)
+
+
+def _filter_auto_language_results(
+    results: list[RecognizerResult],
+    text: str,
+    language: str,
+) -> list[RecognizerResult]:
+    filtered: list[RecognizerResult] = []
+
+    for result in results:
+        matched_text = text[result.start:result.end]
+
+        if result.entity_type not in AUTO_SCRIPT_SENSITIVE_ENTITIES:
+            filtered.append(result)
+            continue
+
+        if language == "zh":
+            if _contains_cjk(matched_text) or _contains_digit(matched_text):
+                filtered.append(result)
+            continue
+
+        filtered.append(result)
+
+    return filtered
+
+
+def _expand_auto_western_person_names(
+    results: list[RecognizerResult],
+    text: str,
+) -> list[RecognizerResult]:
+    expanded_results: list[RecognizerResult] = []
+
+    for result in results:
+        if result.entity_type != "PERSON":
+            expanded_results.append(result)
+            continue
+
+        matched_text = text[result.start:result.end]
+        if not _is_western_name_token(matched_text):
+            expanded_results.append(result)
+            continue
+
+        context_before = text[max(0, result.start - 25):result.start].lower()
+        has_person_context = any(
+            phrase in context_before
+            for phrase in PERSON_CONTEXT_PHRASES["en"]
+        )
+        if not has_person_context:
+            expanded_results.append(result)
+            continue
+
+        suffix_match = WESTERN_NAME_CONTINUATION_RE.match(text[result.end:])
+        if not suffix_match:
+            expanded_results.append(result)
+            continue
+
+        expanded_results.append(
+            RecognizerResult(
+                entity_type=result.entity_type,
+                start=result.start,
+                end=result.end + suffix_match.end(),
+                score=result.score,
+            )
+        )
+
+    return expanded_results
 
 
 def _drop_overlaps(results: list[RecognizerResult]) -> list[RecognizerResult]:
@@ -259,3 +418,81 @@ def _drop_overlaps(results: list[RecognizerResult]) -> list[RecognizerResult]:
 
 def _overlaps(left: RecognizerResult, right: RecognizerResult) -> bool:
     return left.start < right.end and left.end > right.start
+
+
+def _contains_cjk(text: str) -> bool:
+    return any("\u4e00" <= character <= "\u9fff" for character in text)
+
+
+def _contains_digit(text: str) -> bool:
+    return any(character.isdigit() for character in text)
+
+
+def _is_western_name_token(text: str) -> bool:
+    cleaned_text = text.strip()
+    if not cleaned_text:
+        return False
+
+    return all(
+        character.isalpha() or character in {"'", "-", " ", "."}
+        for character in cleaned_text
+    ) and any("A" <= character.upper() <= "Z" for character in cleaned_text if character.isalpha())
+
+
+def _trim_zh_location_prefix(result: RecognizerResult, text: str) -> RecognizerResult:
+    matched_text = text[result.start:result.end]
+
+    for prefix in ZH_LOCATION_PREFIXES:
+        if matched_text.startswith(prefix) and len(matched_text) > len(prefix):
+            result = RecognizerResult(
+                entity_type=result.entity_type,
+                start=result.start + len(prefix),
+                end=result.end,
+                score=result.score,
+            )
+            matched_text = text[result.start:result.end]
+            break
+
+    if ZH_ADMIN_LOCATION_FULL_RE.fullmatch(matched_text):
+        return result
+
+    trimmed_admin_location = _extract_zh_admin_location_suffix(matched_text)
+    if trimmed_admin_location and trimmed_admin_location != matched_text:
+        start_offset = matched_text.rfind(trimmed_admin_location)
+        return RecognizerResult(
+            entity_type=result.entity_type,
+            start=result.start + start_offset,
+            end=result.start + start_offset + len(trimmed_admin_location),
+            score=result.score,
+        )
+
+    admin_location_match = ZH_ADMIN_LOCATION_RE.search(matched_text)
+    if admin_location_match and admin_location_match.group(0) != matched_text:
+        return RecognizerResult(
+            entity_type=result.entity_type,
+            start=result.start + admin_location_match.start(),
+            end=result.start + admin_location_match.end(),
+            score=result.score,
+        )
+
+    return result
+
+
+def _extract_zh_admin_location_suffix(text: str) -> str | None:
+    candidates: list[str] = []
+
+    for start_index in range(len(text)):
+        candidate = text[start_index:]
+        if not ZH_ADMIN_LOCATION_FULL_RE.fullmatch(candidate):
+            continue
+
+        if candidate.startswith(("市", "省", "区", "县", "旗")):
+            continue
+
+        if "市" in candidate or "省" in candidate or "自治区" in candidate or "特别行政区" in candidate:
+            candidates.append(candidate)
+
+    if candidates:
+        return min(candidates, key=len)
+
+    return None
